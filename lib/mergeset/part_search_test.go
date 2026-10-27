@@ -204,7 +204,6 @@ func TestGetInmemoryBlockWithZeroSizeBlock(t *testing.T) {
 
 	var ps partSearch
 	ps.Init(p, false)
-	ps.mrs = p.mrs
 	if err := ps.nextBHS(); err != nil {
 		t.Fatalf("cannot read block headers: %s", err)
 	}
