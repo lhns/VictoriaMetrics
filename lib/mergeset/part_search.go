@@ -20,8 +20,8 @@ type partSearch struct {
 	// p is a part to search.
 	p *part
 
-	// The remaining metaindex rows to scan, obtained from p.mrs.
-	mrs []metaindexRow
+	// The index of the next metaindex row to scan in p.mi.
+	mrIdx int
 
 	// The remaining block headers to scan in the current metaindexRow.
 	bhs []blockHeader
@@ -54,7 +54,7 @@ type partSearch struct {
 func (ps *partSearch) reset() {
 	ps.Item = nil
 	ps.p = nil
-	ps.mrs = nil
+	ps.mrIdx = 0
 	ps.bhs = nil
 	ps.err = nil
 
@@ -107,7 +107,7 @@ func (ps *partSearch) Seek(k []byte) {
 	}
 
 	ps.Item = nil
-	ps.mrs = ps.p.mrs
+	ps.mrIdx = 0
 	ps.bhs = nil
 
 	ps.indexBuf = ps.indexBuf[:0]
@@ -125,17 +125,11 @@ func (ps *partSearch) Seek(k []byte) {
 	}
 
 	// Locate the first metaindexRow to scan.
-	if len(ps.mrs) == 0 {
+	if ps.p.mi.rowsCount() == 0 {
 		logger.Panicf("BUG: part without metaindex rows passed to partSearch")
 	}
-	n := sort.Search(len(ps.mrs), func(i int) bool {
-		return string(k) <= string(ps.mrs[i].firstItem)
-	})
-	if n > 0 {
-		// The given k may be located in the previous metaindexRow, so go to it.
-		n--
-	}
-	ps.mrs = ps.mrs[n:]
+	// The given k may be located in the previous metaindexRow, so seekRow returns it.
+	ps.mrIdx = ps.p.mi.seekRow(k)
 
 	// Read block headers for the found metaindexRow.
 	if err := ps.nextBHS(); err != nil {
@@ -144,7 +138,7 @@ func (ps *partSearch) Seek(k []byte) {
 	}
 
 	// Locate the first block to scan.
-	n = sort.Search(len(ps.bhs), func(i int) bool {
+	n := sort.Search(len(ps.bhs), func(i int) bool {
 		return string(k) <= string(ps.bhs[i].firstItem)
 	})
 	if n > 0 {
@@ -281,18 +275,18 @@ func (ps *partSearch) nextBlock() error {
 }
 
 func (ps *partSearch) nextBHS() error {
-	if len(ps.mrs) == 0 {
+	if ps.mrIdx >= ps.p.mi.rowsCount() {
 		return io.EOF
 	}
-	mr := &ps.mrs[0]
-	ps.mrs = ps.mrs[1:]
+	mr := ps.p.mi.row(ps.mrIdx)
+	ps.mrIdx++
 	idxbKey := blockcache.Key{
 		Part:   ps.p,
 		Offset: mr.indexBlockOffset,
 	}
 	b := idxbCache.GetBlock(idxbKey)
 	if b == nil {
-		idxb, err := ps.readIndexBlock(mr)
+		idxb, err := ps.readIndexBlock(&mr)
 		if err != nil {
 			return fmt.Errorf("cannot read index block: %w", err)
 		}

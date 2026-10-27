@@ -105,6 +105,11 @@ var (
 	cacheSizeMetricNamesStats = flagutil.NewBytes("storage.cacheSizeMetricNamesStats", 0, "Overrides max size for storage/metricNamesStatsTracker cache. "+
 		"See https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#cache-tuning")
 
+	metaindexChunkRows = flag.Int("storage.metaindexChunkRows", 0, "The number of indexdb metaindex rows per in-memory chunk for parts with big metaindex keys. "+
+		"The chunks are compressed in memory, which reduces memory usage for indexdb with big keys at the cost of higher CPU usage on searches. "+
+		"Set to 0 for keeping all the metaindex rows uncompressed in memory. Recommended value for enabling the feature is 128. "+
+		"The value is applied only in memory and can be changed at any restart without affecting the data on disk")
+
 	idbPrefillStart = flag.Duration("storage.idbPrefillStart", time.Hour, "Specifies how early VictoriaMetrics starts pre-filling indexDB records before indexDB rotation. "+
 		"Starting the pre-fill process earlier can help reduce resource usage spikes during rotation. "+
 		"In most cases, this value should not be changed. The maximum allowed value is 23h.")
@@ -134,6 +139,10 @@ func Init(vmselectMaxConcurrentRequests int, vmselectMaxQueueDuration time.Durat
 	storage.SetMetricNamesStatsCacheSize(cacheSizeMetricNamesStats.IntN())
 	storage.SetMetricNameCacheSize(cacheSizeStorageMetricName.IntN())
 	storage.SetMetadataStorageSize(metadataStorageSize.IntN())
+	if *metaindexChunkRows < 0 {
+		logger.Fatalf("-storage.metaindexChunkRows cannot be negative; got %d", *metaindexChunkRows)
+	}
+	mergeset.SetMetaindexChunkRows(*metaindexChunkRows)
 	mergeset.SetIndexBlocksCacheSize(cacheSizeIndexDBIndexBlocks.IntN())
 	mergeset.SetDataBlocksCacheSize(cacheSizeIndexDBDataBlocks.IntN())
 	mergeset.SetDataBlocksSparseCacheSize(cacheSizeIndexDBDataBlocksSparse.IntN())

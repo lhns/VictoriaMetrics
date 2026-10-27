@@ -48,6 +48,11 @@ func (mr *metaindexRow) Unmarshal(src []byte) ([]byte, error) {
 	src = src[nSize:]
 	mr.firstItem = append(mr.firstItem[:0], fi...)
 
+	return mr.unmarshalFields(src)
+}
+
+// unmarshalFields unmarshals all the fields except firstItem from src and returns the tail.
+func (mr *metaindexRow) unmarshalFields(src []byte) ([]byte, error) {
 	// Unmarshal blockHeadersCount
 	if len(src) < 4 {
 		return src, fmt.Errorf("cannot unmarshal blockHeadersCount from %d bytes; need at least %d bytes", len(src), 4)
