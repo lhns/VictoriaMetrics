@@ -1,0 +1,39 @@
+# Single-node cluster for run.sh. Only the vmstorage image and the chunk rows setting change between steps.
+# The setting is passed via env var, because stock vmstorage rejects unknown flags but ignores unknown env vars.
+services:
+  vmstorage:
+    image: ${VMSTORAGE_IMAGE}
+    volumes:
+      - strgdata:/storage
+    ports:
+      - "18482:8482"
+    environment:
+      storage_metaindexChunkRows: "${CHUNK_ROWS:-0}"
+    command:
+      - -envflag.enable
+      - -storageDataPath=/storage
+      - -retentionPeriod=100y
+      - -dedup.minScrapeInterval=1ms
+
+  vminsert:
+    image: victoriametrics/vminsert:${VM_TAG}
+    depends_on: [vmstorage]
+    ports:
+      - "18480:8480"
+    command:
+      - -storageNode=vmstorage:8400
+      - -maxLabelValueLen=32768
+
+  vmselect:
+    image: victoriametrics/vmselect:${VM_TAG}
+    depends_on: [vmstorage]
+    ports:
+      - "18481:8481"
+    command:
+      - -storageNode=vmstorage:8401
+      - -search.maxLabelsAPIDuration=5m
+      - -search.maxQueryDuration=5m
+      - -search.logSlowQueryDuration=5m
+
+volumes:
+  strgdata:
