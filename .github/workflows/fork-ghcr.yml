@@ -1,0 +1,77 @@
+﻿# Builds the fork's vmstorage image and pushes it to ghcr.io/<owner>/vmstorage.
+# Upstream workflows only run on master and cluster, so this is the only CI for fork branches.
+name: fork-ghcr
+
+on:
+  push:
+    branches-ignore:
+      - master
+      - cluster
+    tags:
+      - 'fork-*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: fork-ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test changed packages
+        # Only the dedup and downsampling tests of lib/storage: the full package is slow and has a flaky upstream test.
+        run: |
+          CGO_ENABLED=1 go test -tags synctest -count=1 -run 'Downsampling|Thinning|PartitionMergeDedup|Dedup' ./lib/storage/
+          CGO_ENABLED=1 go test -count=1 ./app/vmstorage/...
+          CGO_ENABLED=0 go test -tags synctest -count=1 -run 'Downsampling|Thinning|PartitionMergeDedup|Dedup' ./lib/storage/
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/vmstorage
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix={{branch}}-,enable=${{ github.ref_type == 'branch' }}
+      - name: Build binaries
+        # Same cgo builds as upstream releases (make publish-vmstorage), limited to amd64 and arm64.
+        run: make vmstorage-linux-amd64-prod vmstorage-linux-arm64-prod
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: bin
+          file: app/vmstorage/multiarch/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            certs_image=alpine:3.24.3
+            root_image=alpine:3.24.3
+            BINARY_SUFFIX=
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          push: true
