@@ -1196,7 +1196,7 @@ func (pt *partition) releasePartsToMerge(pws []*partWrapper) {
 }
 
 func (pt *partition) isFinalDedupNeeded() bool {
-	dedupInterval := GetDedupInterval()
+	dedupInterval := pt.getMergeDedupInterval(time.Now().UnixMilli())
 
 	pws := pt.GetParts(nil, false)
 	minDedupInterval := getMinDedupInterval(pws)
@@ -1425,6 +1425,8 @@ func (pt *partition) mergePartsInternal(dstPartPath string, bsw *blockStreamWrit
 		logger.Panicf("BUG: unknown partType=%d", dstPartType)
 	}
 	retentionDeadline := currentTimestamp - pt.s.retentionMsecs
+	dedupInterval := pt.getMergeDedupInterval(currentTimestamp)
+	bsw.dedupInterval = dedupInterval
 	activeMerges.Add(1)
 	_ = useSparseCache // unused in OSS version.
 	dmis := pt.idb.getDeletedMetricIDs()
@@ -1435,7 +1437,7 @@ func (pt *partition) mergePartsInternal(dstPartPath string, bsw *blockStreamWrit
 		return nil, fmt.Errorf("cannot merge %d parts to %s: %w", len(bsrs), dstPartPath, err)
 	}
 	if dstPartPath != "" {
-		ph.MinDedupInterval = GetDedupInterval()
+		ph.MinDedupInterval = dedupInterval
 		ph.MustWriteMetadata(dstPartPath)
 	}
 	return &ph, nil

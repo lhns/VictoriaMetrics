@@ -175,6 +175,7 @@ func main() {
 	httpserver.CheckHealth(listenAddrs)
 
 	storage.SetDedupInterval(*minScrapeInterval)
+	storage.InitDownsampling()
 	storage.SetDataFlushInterval(*inmemoryDataFlushInterval)
 	storage.LegacySetRetentionTimezoneOffset(*retentionTimezoneOffset)
 	storage.SetFreeDiskSpaceLimit(minFreeDiskSpaceBytes.N)
@@ -721,6 +722,14 @@ func (vms *VMStorage) writeStorageMetrics(w io.Writer) {
 
 	metrics.WriteGaugeUint64(w, `vm_downsampling_partitions_scheduled`, tm.ScheduledDownsamplingPartitions)
 	metrics.WriteGaugeUint64(w, `vm_downsampling_partitions_scheduled_size_bytes`, tm.ScheduledDownsamplingPartitionsSize)
+	for _, r := range storage.DownsamplingRules() {
+		metrics.WriteGaugeUint64(w, fmt.Sprintf(`vm_fork_downsampling_rule_interval_seconds{offset_seconds="%d"}`, r[0]/1000), uint64(r[1]/1000))
+	}
+	dryRun := uint64(0)
+	if storage.IsDownsamplingDryRun() {
+		dryRun = 1
+	}
+	metrics.WriteGaugeUint64(w, `vm_fork_downsampling_dryrun`, dryRun)
 
 	metrics.WriteGaugeUint64(w, `vm_search_max_unique_timeseries`, uint64(vms.maxUniqueTimeSeriesCalculated))
 

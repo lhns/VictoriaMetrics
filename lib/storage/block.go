@@ -149,8 +149,8 @@ func (b *Block) tooBig() bool {
 	return false
 }
 
-func (b *Block) deduplicateSamplesDuringMerge() {
-	if !isDedupEnabled() {
+func (b *Block) deduplicateSamplesDuringMerge(dedupInterval int64) {
+	if dedupInterval <= 0 {
 		// Deduplication is disabled
 		return
 	}
@@ -161,11 +161,6 @@ func (b *Block) deduplicateSamplesDuringMerge() {
 	srcTimestamps := b.timestamps[b.nextIdx:]
 	if len(srcTimestamps) < 2 {
 		// Nothing to dedup.
-		return
-	}
-	dedupInterval := GetDedupInterval()
-	if dedupInterval <= 0 {
-		// Deduplication is disabled.
 		return
 	}
 	srcValues := b.values[b.nextIdx:]

@@ -514,6 +514,7 @@ func (tb *table) historicalMergeWatcher() {
 				continue
 			}
 			mergeScheduled := false
+			ptw.pt.logDownsamplingDryRun(timestamp)
 			if ptw.pt.isFinalDedupNeeded() {
 				// mark partition with final deduplication marker
 				ptw.pt.isDedupScheduled.Store(true)
