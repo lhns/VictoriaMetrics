@@ -105,6 +105,11 @@ var (
 	cacheSizeMetricNamesStats = flagutil.NewBytes("storage.cacheSizeMetricNamesStats", 0, "Overrides max size for storage/metricNamesStatsTracker cache. "+
 		"See https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#cache-tuning")
 
+	metaindexChunkRows = flag.Int("storage.metaindexChunkRows", 0, "The number of indexdb metaindex rows per in-memory chunk for parts with big metaindex keys. "+
+		"The chunks are compressed in memory, which reduces memory usage for indexdb with big keys at the cost of higher CPU usage on searches. "+
+		"Set to 0 for keeping all the metaindex rows uncompressed in memory. Recommended value for enabling the feature is 64. See https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#index-with-long-labels . "+
+		"The value is applied only in memory and can be changed at any restart without affecting the data on disk")
+
 	idbPrefillStart = flag.Duration("storage.idbPrefillStart", time.Hour, "Specifies how early VictoriaMetrics starts pre-filling indexDB records before indexDB rotation. "+
 		"Starting the pre-fill process earlier can help reduce resource usage spikes during rotation. "+
 		"In most cases, this value should not be changed. The maximum allowed value is 23h.")
@@ -134,6 +139,10 @@ func Init(vmselectMaxConcurrentRequests int, vmselectMaxQueueDuration time.Durat
 	storage.SetMetricNamesStatsCacheSize(cacheSizeMetricNamesStats.IntN())
 	storage.SetMetricNameCacheSize(cacheSizeStorageMetricName.IntN())
 	storage.SetMetadataStorageSize(metadataStorageSize.IntN())
+	if *metaindexChunkRows < 0 {
+		logger.Fatalf("-storage.metaindexChunkRows cannot be negative; got %d", *metaindexChunkRows)
+	}
+	mergeset.SetMetaindexChunkRows(*metaindexChunkRows)
 	mergeset.SetIndexBlocksCacheSize(cacheSizeIndexDBIndexBlocks.IntN())
 	mergeset.SetDataBlocksCacheSize(cacheSizeIndexDBDataBlocks.IntN())
 	mergeset.SetDataBlocksSparseCacheSize(cacheSizeIndexDBDataBlocksSparse.IntN())
@@ -540,6 +549,7 @@ func (vms *VMStorage) writeStorageMetrics(w io.Writer) {
 	metrics.WriteGaugeUint64(w, `vm_cache_entries{type="indexdb/dataBlocks"}`, idbm.DataBlocksCacheSize)
 	metrics.WriteGaugeUint64(w, `vm_cache_entries{type="indexdb/dataBlocksSparse"}`, idbm.DataBlocksSparseCacheSize)
 	metrics.WriteGaugeUint64(w, `vm_cache_entries{type="indexdb/indexBlocks"}`, idbm.IndexBlocksCacheSize)
+	metrics.WriteGaugeUint64(w, `vm_cache_entries{type="indexdb/metaindexChunks"}`, idbm.MetaindexChunksCacheSize)
 	metrics.WriteGaugeUint64(w, `vm_cache_entries{type="indexdb/metricID"}`, idbm.MetricIDCacheSize)
 	metrics.WriteGaugeUint64(w, `vm_cache_entries{type="indexdb/date_metricID"}`, idbm.DateMetricIDCacheSize)
 	metrics.WriteGaugeUint64(w, `vm_cache_entries{type="indexdb/tagFiltersToMetricIDs"}`, idbm.TagFiltersToMetricIDsCacheSize)
@@ -558,6 +568,7 @@ func (vms *VMStorage) writeStorageMetrics(w io.Writer) {
 	metrics.WriteGaugeUint64(w, `vm_cache_size_bytes{type="indexdb/dataBlocks"}`, idbm.DataBlocksCacheSizeBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_bytes{type="indexdb/dataBlocksSparse"}`, idbm.DataBlocksSparseCacheSizeBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_bytes{type="indexdb/indexBlocks"}`, idbm.IndexBlocksCacheSizeBytes)
+	metrics.WriteGaugeUint64(w, `vm_cache_size_bytes{type="indexdb/metaindexChunks"}`, idbm.MetaindexChunksCacheSizeBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_bytes{type="indexdb/tagFiltersToMetricIDs"}`, idbm.TagFiltersToMetricIDsCacheSizeBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_bytes{type="indexdb/tagFiltersLoops"}`, idbm.LoopsPerDateTagFilterCacheSizeBytes)
 
@@ -570,6 +581,7 @@ func (vms *VMStorage) writeStorageMetrics(w io.Writer) {
 	metrics.WriteGaugeUint64(w, `vm_cache_size_max_bytes{type="indexdb/dataBlocks"}`, idbm.DataBlocksCacheSizeMaxBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_max_bytes{type="indexdb/dataBlocksSparse"}`, idbm.DataBlocksSparseCacheSizeMaxBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_max_bytes{type="indexdb/indexBlocks"}`, idbm.IndexBlocksCacheSizeMaxBytes)
+	metrics.WriteGaugeUint64(w, `vm_cache_size_max_bytes{type="indexdb/metaindexChunks"}`, idbm.MetaindexChunksCacheSizeMaxBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_max_bytes{type="indexdb/tagFiltersToMetricIDs"}`, idbm.TagFiltersToMetricIDsCacheSizeMaxBytes)
 	metrics.WriteGaugeUint64(w, `vm_cache_size_max_bytes{type="indexdb/tagFiltersLoops"}`, idbm.LoopsPerDateTagFilterCacheSizeMaxBytes)
 
@@ -582,6 +594,7 @@ func (vms *VMStorage) writeStorageMetrics(w io.Writer) {
 	metrics.WriteCounterUint64(w, `vm_cache_requests_total{type="indexdb/dataBlocks"}`, idbm.DataBlocksCacheRequests)
 	metrics.WriteCounterUint64(w, `vm_cache_requests_total{type="indexdb/dataBlocksSparse"}`, idbm.DataBlocksSparseCacheRequests)
 	metrics.WriteCounterUint64(w, `vm_cache_requests_total{type="indexdb/indexBlocks"}`, idbm.IndexBlocksCacheRequests)
+	metrics.WriteCounterUint64(w, `vm_cache_requests_total{type="indexdb/metaindexChunks"}`, idbm.MetaindexChunksCacheRequests)
 	metrics.WriteCounterUint64(w, `vm_cache_requests_total{type="indexdb/tagFiltersToMetricIDs"}`, idbm.TagFiltersToMetricIDsCacheRequests)
 	metrics.WriteCounterUint64(w, `vm_cache_requests_total{type="indexdb/tagFiltersLoops"}`, idbm.LoopsPerDateTagFilterCacheRequests)
 
@@ -594,6 +607,7 @@ func (vms *VMStorage) writeStorageMetrics(w io.Writer) {
 	metrics.WriteCounterUint64(w, `vm_cache_misses_total{type="indexdb/dataBlocks"}`, idbm.DataBlocksCacheMisses)
 	metrics.WriteCounterUint64(w, `vm_cache_misses_total{type="indexdb/dataBlocksSparse"}`, idbm.DataBlocksSparseCacheMisses)
 	metrics.WriteCounterUint64(w, `vm_cache_misses_total{type="indexdb/indexBlocks"}`, idbm.IndexBlocksCacheMisses)
+	metrics.WriteCounterUint64(w, `vm_cache_misses_total{type="indexdb/metaindexChunks"}`, idbm.MetaindexChunksCacheMisses)
 	metrics.WriteCounterUint64(w, `vm_cache_misses_total{type="indexdb/tagFiltersToMetricIDs"}`, idbm.TagFiltersToMetricIDsCacheMisses)
 	metrics.WriteCounterUint64(w, `vm_cache_misses_total{type="indexdb/tagFiltersLoops"}`, idbm.LoopsPerDateTagFilterCacheMisses)
 

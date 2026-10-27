@@ -596,6 +596,8 @@ See the docs at https://docs.victoriametrics.com/victoriametrics/
   -storage.maxMetadataStorageSize size
      Overrides max size for metrics metadata entries in-memory storage. If set to 0 or a negative value, defaults to 1% of allowed memory.
      Supports the following optional suffixes for size values: KB, MB, GB, TB, KiB, MiB, GiB, TiB (default 0)
+  -storage.metaindexChunkRows int
+     The number of indexdb metaindex rows per in-memory chunk for parts with big metaindex keys. The chunks are compressed in memory, which reduces memory usage for indexdb with big keys at the cost of higher CPU usage on searches. Set to 0 for keeping all the metaindex rows uncompressed in memory. Recommended value for enabling the feature is 64. See https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#index-with-long-labels . The value is applied only in memory and can be changed at any restart without affecting the data on disk
   -storage.minFreeDiskSpaceBytes size
      The minimum free disk space at -storageDataPath after which the storage stops accepting new data
      Supports the following optional suffixes for size values: KB, MB, GB, TB, KiB, MiB, GiB, TiB (default 100000000)

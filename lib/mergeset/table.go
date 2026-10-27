@@ -581,6 +581,12 @@ type TableMetrics struct {
 	IndexBlocksCacheRequests     uint64
 	IndexBlocksCacheMisses       uint64
 
+	MetaindexChunksCacheSize         uint64
+	MetaindexChunksCacheSizeBytes    uint64
+	MetaindexChunksCacheSizeMaxBytes uint64
+	MetaindexChunksCacheRequests     uint64
+	MetaindexChunksCacheMisses       uint64
+
 	PartsRefCount uint64
 
 	TooLongItemsDroppedTotal uint64
@@ -634,7 +640,7 @@ func (tb *Table) UpdateMetrics(m *TableMetrics) {
 	}
 	tb.partsLock.Unlock()
 
-	// The dataBlockCache, dataBlockSparseCache, and IndexBlocksCache metrics
+	// The dataBlockCache, dataBlockSparseCache, IndexBlocksCache and metaindexChunksCache metrics
 	// are not summed up intentionally because these caches are shared by all
 	// mergeset table instances. I.e. each table instance will report exact same
 	// metrics for this cache.
@@ -656,6 +662,12 @@ func (tb *Table) UpdateMetrics(m *TableMetrics) {
 	m.IndexBlocksCacheSizeMaxBytes = uint64(idxbCache.SizeMaxBytes())
 	m.IndexBlocksCacheRequests = idxbCache.Requests()
 	m.IndexBlocksCacheMisses = idxbCache.Misses()
+
+	m.MetaindexChunksCacheSize = uint64(metaindexChunksCache.Len())
+	m.MetaindexChunksCacheSizeBytes = uint64(metaindexChunksCache.SizeBytes())
+	m.MetaindexChunksCacheSizeMaxBytes = uint64(metaindexChunksCache.SizeMaxBytes())
+	m.MetaindexChunksCacheRequests = metaindexChunksCache.Requests()
+	m.MetaindexChunksCacheMisses = metaindexChunksCache.Misses()
 
 	m.TooLongItemsDroppedTotal = tooLongItemsTotal.Load()
 }

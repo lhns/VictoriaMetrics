@@ -28,10 +28,14 @@ type blockStreamReader struct {
 	// ph contains partHeader for the read part.
 	ph partHeader
 
-	// All the metaindexRows.
+	// All the metaindexRows for inmemory parts.
 	// The blockStreamReader doesn't own mrs - it must be alive
 	// during the read.
 	mrs []metaindexRow
+
+	// mir streams metaindexRows for file-based parts instead of loading them all into memory.
+	// It is closed in reset.
+	mir *metaindexReader
 
 	// The index for the currently processed metaindexRow from mrs.
 	mrIdx int
@@ -69,6 +73,10 @@ type blockStreamReader struct {
 }
 
 func (bsr *blockStreamReader) reset() {
+	if bsr.mir != nil {
+		bsr.mir.mustClose()
+		bsr.mir = nil
+	}
 	bsr.Block.Reset()
 	bsr.isInmemoryBlock = false
 	bsr.currItemIdx = 0
@@ -148,12 +156,7 @@ func (bsr *blockStreamReader) MustInitFromFilePart(path string) {
 	metaindexPath := filepath.Join(path, metaindexFilename)
 	metaindexFile := filestream.MustOpen(metaindexPath, true)
 
-	mrs, err := unmarshalMetaindexRows(bsr.mrs[:0], metaindexFile)
-	metaindexFile.MustClose()
-	if err != nil {
-		logger.Panicf("FATAL: cannot unmarshal metaindex rows from file %q: %s", metaindexPath, err)
-	}
-	bsr.mrs = mrs
+	bsr.mir = newMetaindexReader(metaindexFile)
 
 	bsr.path = path
 
@@ -259,11 +262,21 @@ func (bsr *blockStreamReader) Next() bool {
 }
 
 func (bsr *blockStreamReader) readNextBHS() error {
-	if bsr.mrIdx >= len(bsr.mrs) {
-		return io.EOF
+	var mr *metaindexRow
+	if bsr.mir != nil {
+		if err := bsr.mir.next(); err != nil {
+			if err != io.EOF {
+				err = fmt.Errorf("cannot read metaindexRow #%d from %q: %w", bsr.mrIdx, bsr.path, err)
+			}
+			return err
+		}
+		mr = &bsr.mir.mr
+	} else {
+		if bsr.mrIdx >= len(bsr.mrs) {
+			return io.EOF
+		}
+		mr = &bsr.mrs[bsr.mrIdx]
 	}
-
-	mr := &bsr.mrs[bsr.mrIdx]
 	bsr.mrIdx++
 
 	// Read compressed index block.

@@ -2426,6 +2426,22 @@ and vmstorage has enough free memory to accommodate new cache sizes.
 To override the default values see command-line flag `-cacheExpireDuration` and flags with `-storage.cacheSize` prefix.
 See the full description of [command-line flags](#list-of-command-line-flags).
 
+### Index with long labels
+
+VictoriaMetrics keeps the metaindex of every indexdb part in memory. The metaindex holds the first index entry
+of every index block, and index entries contain label values. If some labels have very long values
+(for example, a full process command line of tens of KiB), the metaindex may need tens of GiB of RAM
+and VictoriaMetrics may run out of memory at startup. The memory used by the metaindex is exported
+via `vm_data_size_bytes{type="indexdb/metaindex"}` metric at [`/metrics` page](#monitoring).
+
+In this case set `-storage.metaindexChunkRows` command-line flag {{% available_from "#" %}} to `64`. Then the metaindex of big indexdb parts
+is kept in compressed chunks of the given number of rows, which are decompressed on demand and cached
+in `indexdb/metaindexChunks` cache. Bigger values reduce memory usage further at the cost of higher CPU usage on searches.
+The flag affects only the in-memory representation, so it can be changed or removed at any restart.
+
+It is better to drop such labels before ingestion via [relabeling](https://docs.victoriametrics.com/victoriametrics/relabeling/),
+since they increase disk usage and slow down queries.
+
 ## Data migration
 
 ### From VictoriaMetrics

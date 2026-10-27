@@ -78,7 +78,7 @@ type part struct {
 
 	size uint64
 
-	mrs                []metaindexRow
+	mi                 *metaindex
 	metaindexSizeBytes uint64
 
 	indexFile fs.MustReadAtCloser
@@ -125,17 +125,16 @@ func mustOpenFilePart(path string) *part {
 }
 
 func newPart(ph *partHeader, path string, size uint64, metaindexReader filestream.ReadCloser, indexFile, itemsFile, lensFile fs.MustReadAtCloser) *part {
-	mrs, err := unmarshalMetaindexRows(nil, metaindexReader)
+	var p part
+	mi, err := readMetaindex(metaindexReader, &p)
 	if err != nil {
 		logger.Panicf("FATAL: cannot unmarshal metaindexRows from %q: %s", path, err)
 	}
-	metaindexReader.MustClose()
 
-	var p part
 	p.path = path
 	p.size = size
-	p.mrs = mrs
-	p.metaindexSizeBytes = metaindexSizeBytes(mrs)
+	p.mi = mi
+	p.metaindexSizeBytes = mi.sizeBytes()
 
 	p.indexFile = indexFile
 	p.itemsFile = itemsFile
@@ -156,6 +155,7 @@ func (p *part) MustClose() {
 	fs.MustCloseParallel(cs)
 
 	idxbCache.RemoveBlocksForPart(p)
+	p.mi.mustClose()
 	ibCache.RemoveBlocksForPart(p)
 	ibSparseCache.RemoveBlocksForPart(p)
 }

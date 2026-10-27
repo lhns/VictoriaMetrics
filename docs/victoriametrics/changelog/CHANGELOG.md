@@ -26,6 +26,8 @@ See also [LTS releases](https://docs.victoriametrics.com/victoriametrics/lts-rel
 
 ## tip
 
+* FEATURE: [vmstorage](https://docs.victoriametrics.com/victoriametrics/cluster-victoriametrics/) and [Single-node VictoriaMetrics](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/): reduce memory usage for indexdb with long label values via `-storage.metaindexChunkRows` command-line flag. Previously the metaindex of every indexdb part was kept uncompressed in memory, so labels with tens of KiB values could make the storage use more than 100 GiB of RAM at startup. The flag doesn't change the on-disk format, so it can be changed or removed at any restart. See [these docs](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#index-with-long-labels).
+
 ## [v1.155.0](https://github.com/VictoriaMetrics/VictoriaMetrics/releases/tag/v1.155.0)
 
 Released at 2026-10-26
