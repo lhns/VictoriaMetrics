@@ -22,8 +22,8 @@ const (
 	downsamplingPeriodEnvVar = "VM_FORK_DOWNSAMPLING_PERIOD"
 	downsamplingDryRunEnvVar = "VM_FORK_DOWNSAMPLING_DRYRUN"
 
-	// Thinning younger partitions is allowed, but late writes and replays then cause avoidable rewrites of the month.
-	minRecommendedDownsamplingOffset = 14 * 24 * time.Hour
+	// A wrong or jumped clock, or a typo like 1d, would irreversibly thin months which may still get late writes.
+	minDownsamplingOffset = 14 * 24 * time.Hour
 )
 
 type downsamplingRule struct {
@@ -46,12 +46,6 @@ func InitDownsampling() {
 		logger.Fatalf("invalid %s: %s", downsamplingPeriodEnvVar, err)
 	}
 	downsamplingRules = rules
-	for _, r := range rules {
-		if time.Duration(r.offsetMsecs)*time.Millisecond < minRecommendedDownsamplingOffset {
-			logger.Warnf("%s: offset %s is smaller than %s; late writes into the thinned months will cause month rewrites",
-				downsamplingPeriodEnvVar, msecsToDuration(r.offsetMsecs), minRecommendedDownsamplingOffset)
-		}
-	}
 	if len(rules) > 0 {
 		logger.Infof("downsampling rules from %s: %s; dryRun=%v", downsamplingPeriodEnvVar, formatDownsamplingRules(rules), downsamplingDryRun)
 	}
@@ -100,8 +94,15 @@ func parseDownsamplingRules(s string, dedupInterval int64) ([]downsamplingRule, 
 		if r.offsetMsecs <= 0 {
 			return nil, fmt.Errorf("offset must be positive in %q", item)
 		}
+		if msecsToDuration(r.offsetMsecs) < minDownsamplingOffset {
+			return nil, fmt.Errorf("offset in %q must be at least %s", item, minDownsamplingOffset)
+		}
 		if r.intervalMsecs <= 0 {
 			return nil, fmt.Errorf("interval must be positive in %q", item)
+		}
+		// Partitions start at 00:00 UTC, so otherwise a bucket would straddle the partition edge.
+		if (24*time.Hour).Milliseconds()%r.intervalMsecs != 0 {
+			return nil, fmt.Errorf("interval in %q must divide 24h", item)
 		}
 		if r.intervalMsecs%dedupInterval != 0 {
 			return nil, fmt.Errorf("interval in %q must be a multiple of -dedup.minScrapeInterval=%dms", item, dedupInterval)

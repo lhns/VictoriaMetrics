@@ -30,8 +30,9 @@ func TestParseDownsamplingRules(t *testing.T) {
 	f("30d:1m, 60d:5m,120d:1h", 60000, []downsamplingRule{{30 * testDay, testMinute}, {60 * testDay, 5 * testMinute}, {120 * testDay, 60 * testMinute}})
 	// interval equal to the dedup interval is a no-op, but valid
 	f("30d:15s", 15000, []downsamplingRule{{30 * testDay, 15000}})
-	// short offsets are only warned about
-	f("1d:1m", 15000, []downsamplingRule{{testDay, testMinute}})
+	f("14d:1m", 15000, []downsamplingRule{{14 * testDay, testMinute}})
+	f("14d:1d", 15000, []downsamplingRule{{14 * testDay, testDay}})
+	f("14d:1h", 60000, []downsamplingRule{{14 * testDay, 60 * testMinute}})
 
 	fail := func(s string, dedupInterval int64) {
 		t.Helper()
@@ -48,6 +49,8 @@ func TestParseDownsamplingRules(t *testing.T) {
 	fail("0:1m", 15000)                 // zero offset
 	fail("0d:1m", 15000)                // zero offset
 	fail("-1d:1m", 15000)               // negative offset
+	fail("1d:1m", 15000)                // offset below 14d
+	fail("13d:1m", 15000)               // offset below 14d
 	fail("90d:0s", 15000)               // zero interval
 	fail("90d:1m,60d:5m", 15000)        // offsets decrease
 	fail("90d:1m,90d:5m", 15000)        // offsets are equal
@@ -56,6 +59,8 @@ func TestParseDownsamplingRules(t *testing.T) {
 	fail("30d:1m,60d:90s", 15000)       // not a multiple of the previous interval
 	fail("30d:1m,60d:5m,90d:7m", 15000) // not a multiple of the previous interval
 	fail("30d:20s", 15000)              // not a multiple of the dedup interval
+	fail("30d:7m", 60000)               // does not divide 24h
+	fail("30d:2d", 15000)               // does not divide 24h
 	fail("30d:1m,", 15000)              // trailing comma
 }
 
@@ -118,13 +123,13 @@ func TestPartitionMergeDedupInterval(t *testing.T) {
 	f(newPT(2025, time.May), time.Date(2025, time.July, 30, 23, 59, 59, 999_000_000, time.UTC), 300000)
 	f(newPT(2024, time.January), now, 300000)
 
-	// A tiny offset still never makes the current month eligible.
-	withDownsamplingRules(t, 15000, "1ms:1m", false)
+	// The smallest offset still never makes the current month eligible.
+	withDownsamplingRules(t, 15000, "14d:1m", false)
 	f(newPT(2025, time.June), now, 15000)
 	f(newPT(2025, time.May), now, 60000)
 
 	// Dry-run forces the global interval.
-	withDownsamplingRules(t, 15000, "1ms:1m", true)
+	withDownsamplingRules(t, 15000, "14d:1m", true)
 	f(newPT(2025, time.May), now, 15000)
 
 	// No rules: the global interval.
