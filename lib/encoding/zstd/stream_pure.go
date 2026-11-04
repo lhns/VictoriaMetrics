@@ -55,6 +55,10 @@ func GetReader(r io.Reader) *Reader {
 
 // PutReader returns zr to the pool, so it could be reused via GetReader.
 func PutReader(zr *Reader) {
+	if !poolReaders {
+		zr.Release()
+		return
+	}
 	if err := zr.d.Reset(nil); err != nil {
 		logger.Panicf("BUG: unexpected error when resetting ZSTD reader: %s", err)
 	}
