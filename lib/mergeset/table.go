@@ -745,6 +745,11 @@ func (tb *Table) DebugFlush() {
 
 	// Wait for background flushers to finish.
 	tb.flushPendingItemsWG.Wait()
+
+	// A background flush may have left the callback pending, and then this flush may have had nothing to flush.
+	if tb.flushCallback != nil && tb.needFlushCallbackCall.CompareAndSwap(true, false) {
+		tb.flushCallback()
+	}
 }
 
 func (tb *Table) pendingItemsFlusher() {
