@@ -16,6 +16,9 @@ import (
 type blockStreamWriter struct {
 	compressLevel int
 
+	// dedupInterval overrides the global dedup interval if it is non-zero. See mergePartsInternal().
+	dedupInterval int64
+
 	timestampsWriter filestream.WriteCloser
 	valuesWriter     filestream.WriteCloser
 	indexWriter      filestream.WriteCloser
@@ -44,6 +47,7 @@ type blockStreamWriter struct {
 // Init initializes bsw with the given writers.
 func (bsw *blockStreamWriter) reset() {
 	bsw.compressLevel = 0
+	bsw.dedupInterval = 0
 
 	bsw.timestampsWriter = nil
 	bsw.valuesWriter = nil
@@ -137,7 +141,11 @@ func (bsw *blockStreamWriter) MustClose() {
 // WriteExternalBlock writes b to bsw and updates ph and rowsMerged.
 func (bsw *blockStreamWriter) WriteExternalBlock(b *Block, ph *partHeader, rowsMerged *uint64) {
 	*rowsMerged += uint64(b.rowsCount())
-	b.deduplicateSamplesDuringMerge()
+	dedupInterval := bsw.dedupInterval
+	if dedupInterval == 0 {
+		dedupInterval = GetDedupInterval()
+	}
+	b.deduplicateSamplesDuringMerge(dedupInterval)
 	headerData, timestampsData, valuesData := b.MarshalData(bsw.timestampsBlockOffset, bsw.valuesBlockOffset)
 
 	usePrevTimestamps := len(bsw.prevTimestampsData) > 0 && bytes.Equal(timestampsData, bsw.prevTimestampsData)

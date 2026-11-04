@@ -29,9 +29,12 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test changed packages
+        # Only the dedup and downsampling tests of lib/storage, since the full package is slow.
         run: |
           CGO_ENABLED=1 go test -count=1 ./lib/mergeset/... ./app/vmstorage/...
+          CGO_ENABLED=1 go test -tags synctest -count=1 -run 'Downsampling|Thinning|PartitionMergeDedup|Dedup' ./lib/storage/
           CGO_ENABLED=0 go test -count=1 ./lib/mergeset/...
+          CGO_ENABLED=0 go test -tags synctest -count=1 -run 'Downsampling|Thinning|PartitionMergeDedup|Dedup' ./lib/storage/
 
   publish:
     needs: test

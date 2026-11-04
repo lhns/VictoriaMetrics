@@ -113,6 +113,30 @@ func (tc *TestCase) MustStartVmstorage(instance string, flags []string) *Vmstora
 	return app
 }
 
+// MustStartVmstorageWithBinary is like MustStartVmstorage, but starts the given
+// binary with extra KEY=VALUE environment variables.
+func (tc *TestCase) MustStartVmstorageWithBinary(instance, binary string, env, flags []string) *Vmstorage {
+	tc.t.Helper()
+
+	app, err := StartVmstorageWithBinary(instance, binary, env, flags, tc.cli, tc.output)
+	if err != nil {
+		tc.t.Fatalf("Could not start %s: %v", instance, err)
+	}
+	tc.addApp(instance, app)
+	return app
+}
+
+// KillApp sends SIGKILL to the app identified by the `instance` name and
+// removes it from the collection of started apps.
+func (tc *TestCase) KillApp(instance string) {
+	if app, exists := tc.startedApps[instance]; exists {
+		if k, ok := app.(interface{ Kill() }); ok {
+			k.Kill()
+		}
+		delete(tc.startedApps, instance)
+	}
+}
+
 // MustStartVmselect is a test helper function that starts an instance of
 // vmselect (latest version) and fails the test if the app fails to start.
 func (tc *TestCase) MustStartVmselect(instance string, flags []string) *Vmselect {

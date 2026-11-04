@@ -32,6 +32,7 @@ type app struct {
 	binary   string
 	flags    []string
 	process  *os.Process
+	killed   bool
 	wait     bool
 	output   io.Writer
 }
@@ -41,6 +42,7 @@ type app struct {
 type appOptions struct {
 	defaultFlags map[string]string
 	extractREs   []*regexp.Regexp
+	env          []string
 	wait         bool
 	output       io.Writer
 }
@@ -61,6 +63,9 @@ func startApp(instance string, binary string, flags []string, opts *appOptions) 
 	flags = setDefaultFlags(flags, opts.defaultFlags)
 
 	cmd := exec.Command(binary, flags...)
+	if len(opts.env) > 0 {
+		cmd.Env = append(os.Environ(), opts.env...)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, nil, err
@@ -91,7 +96,7 @@ func startApp(instance string, binary string, flags []string, opts *appOptions) 
 
 	lineProcessors := make([]lineProcessor, len(opts.extractREs))
 	reExtractors := make([]*reExtractor, len(opts.extractREs))
-	timeout := time.NewTimer(5 * time.Second).C
+	timeout := time.NewTimer(startupTimeout()).C
 	for i, re := range opts.extractREs {
 		reExtractors[i] = newREExtractor(re, timeout)
 		lineProcessors[i] = reExtractors[i].extractRE
@@ -109,6 +114,16 @@ func startApp(instance string, binary string, flags []string, opts *appOptions) 
 	}
 
 	return app, extracts, err
+}
+
+// startupTimeout returns the time an app has to log its runtime values.
+//
+// It can be raised with APPTEST_STARTUP_TIMEOUT (a Go duration) on slow machines.
+func startupTimeout() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("APPTEST_STARTUP_TIMEOUT")); err == nil && d > 0 {
+		return d
+	}
+	return 5 * time.Second
 }
 
 // setDefaultFlags adds flags with default values to `flags` if it does not
@@ -131,7 +146,7 @@ func setDefaultFlags(flags []string, defaultFlags map[string]string) []string {
 // Stop sends the app process a SIGINT signal and waits until it terminates
 // gracefully.
 func (app *app) Stop() {
-	if app.wait {
+	if app.wait || app.killed {
 		return
 	}
 	if err := app.process.Signal(os.Interrupt); err != nil {
@@ -140,6 +155,18 @@ func (app *app) Stop() {
 	if _, err := app.process.Wait(); err != nil {
 		log.Fatalf("Could not wait for %s process completion: %v", app.instance, err)
 	}
+}
+
+// Kill sends the app process a SIGKILL signal and waits until it terminates.
+//
+// A killed app is a no-op for Stop().
+func (app *app) Kill() {
+	if err := app.process.Kill(); err != nil {
+		log.Fatalf("Could not kill %s process: %v", app.instance, err)
+	}
+	// Wait returns an error for a killed process.
+	_, _ = app.process.Wait()
+	app.killed = true
 }
 
 // Name returns the application instance name.

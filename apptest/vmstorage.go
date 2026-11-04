@@ -21,11 +21,23 @@ func StartVmstorage(instance string, flags []string, cli *Client, output io.Writ
 	return startVmstorage(instance, binary, flags, cli, output)
 }
 
+// StartVmstorageWithBinary starts vmstorage from the given binary with extra
+// environment variables (in KEY=VALUE form), which allows switching binaries
+// over the same storageDataPath.
+func StartVmstorageWithBinary(instance, binary string, env []string, flags []string, cli *Client, output io.Writer) (*Vmstorage, error) {
+	return startVmstorageEnv(instance, binary, env, flags, cli, output)
+}
+
 // startVmstorage starts an instance of vmstorage with the given flags. It also
 // sets the default flags and populates the app instance state with runtime
 // values extracted from the application log (such as httpListenAddr)
 func startVmstorage(instance, binary string, flags []string, cli *Client, output io.Writer) (*Vmstorage, error) {
+	return startVmstorageEnv(instance, binary, nil, flags, cli, output)
+}
+
+func startVmstorageEnv(instance, binary string, env []string, flags []string, cli *Client, output io.Writer) (*Vmstorage, error) {
 	app, stderrExtracts, err := startApp(instance, binary, flags, &appOptions{
+		env: env,
 		defaultFlags: map[string]string{
 			"-storageDataPath": fmt.Sprintf("%s/%s-%d", os.TempDir(), instance, time.Now().UnixNano()),
 			"-httpListenAddr":  "127.0.0.1:0",
