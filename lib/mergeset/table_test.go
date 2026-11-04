@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 )
@@ -353,4 +354,31 @@ func TestTableMustMergeInmemoryPartsFinal_pwsRefCount(t *testing.T) {
 	pwFinal = tb.mustMergeInmemoryPartsFinal(pwsSrc)
 	assertRefCount(pwsSrc, 0)
 	assertRefCount([]*partWrapper{pwFinal}, 1)
+}
+
+// A background flush only marks flushCallback as pending. DebugFlush must run it even if nothing is left to flush,
+// since callers rely on seeing the flushed data, and the callback resets caches of search results.
+func TestTableDebugFlushRunsPendingFlushCallback(t *testing.T) {
+	path := "TestTableDebugFlushRunsPendingFlushCallback"
+	fs.MustRemoveDir(path)
+	defer fs.MustRemoveDir(path)
+
+	var calls atomic.Uint32
+	var isReadOnly atomic.Bool
+	tb := MustOpenTable(path, time.Hour, func() { calls.Add(1) }, time.Hour, nil, &isReadOnly)
+	defer tb.MustClose()
+
+	tb.DebugFlush()
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("unexpected flushCallback calls without pending data; got %d", n)
+	}
+
+	tb.needFlushCallbackCall.Store(true)
+	tb.DebugFlush()
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("unexpected flushCallback calls with a pending callback; got %d; want 1", n)
+	}
+	if tb.needFlushCallbackCall.Load() {
+		t.Fatalf("the pending flushCallback must be cleared")
+	}
 }
