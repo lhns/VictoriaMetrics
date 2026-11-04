@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/timeutil"
 )
@@ -176,4 +177,49 @@ func (pt *partition) logDownsamplingDryRun(now int64) {
 	pt.PutParts(pws)
 	logger.Infof("downsampling dry-run: partition %s would be thinned to %s; parts claim %s; scheduled=%v",
 		pt.name, msecsToDuration(interval), msecsToDuration(minInterval), interval > minInterval)
+}
+
+// mergeUnderStampedParts merges the parts of pt which claim a smaller interval than the one pt must have.
+//
+// Parts which already claim it are left alone, so a few late parts, for example a backfill written by stock,
+// don't rewrite the whole month. A bucket split between a merged and a skipped part keeps a sample in each
+// until a later merge joins them, like a bucket split between two blocks.
+func (pt *partition) mergeUnderStampedParts(stopCh <-chan struct{}) error {
+	pws := pt.getUnderStampedPartsForMerge(pt.getMergeDedupInterval(time.Now().UnixMilli()))
+	if len(pws) == 0 {
+		return nil
+	}
+
+	newPartSize := getPartsSize(pws)
+	maxOutBytes := fs.MustGetFreeSpace(pt.bigPartsPath)
+	if newPartSize > maxOutBytes {
+		forceMergeLogger.Warnf("cannot initiate downsampling merge for the partition %s; additional space needed: %d bytes", pt.name, newPartSize-maxOutBytes)
+		pt.releasePartsToMerge(pws)
+		return nil
+	}
+
+	// A single part must be merged too, so that it is thinned and claims the interval.
+	if err := pt.mergePartsToFiles(pws, stopCh, bigPartsConcurrencyCh, true); err != nil {
+		return fmt.Errorf("cannot merge %d parts claiming less than the target interval from partition %q: %w", len(pws), pt.name, err)
+	}
+	return nil
+}
+
+// getUnderStampedPartsForMerge marks for merge the parts of pt which claim less than interval.
+//
+// Parts in an active merge are skipped. That merge normally stamps its output with the target interval,
+// and the next run picks up whatever still claims less.
+func (pt *partition) getUnderStampedPartsForMerge(interval int64) []*partWrapper {
+	var pws []*partWrapper
+	pt.partsLock.Lock()
+	for _, src := range [][]*partWrapper{pt.inmemoryParts, pt.smallParts, pt.bigParts} {
+		for _, pw := range src {
+			if !pw.isInMerge && pw.p.ph.MinDedupInterval < interval {
+				pw.isInMerge = true
+				pws = append(pws, pw)
+			}
+		}
+	}
+	pt.partsLock.Unlock()
+	return pws
 }

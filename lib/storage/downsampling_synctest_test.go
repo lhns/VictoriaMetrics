@@ -188,7 +188,7 @@ func TestDownsamplingSwitchStockAndFork(t *testing.T) {
 		ptws := s.tb.GetAllPartitions(nil)
 		for _, ptw := range ptws {
 			if ptw.pt.isFinalDedupNeeded() {
-				if err := ptw.pt.ForceMergeAllParts(nil); err != nil {
+				if err := ptw.pt.mergeUnderStampedParts(nil); err != nil {
 					t.Fatalf("cannot force merge: %s", err)
 				}
 			}
@@ -603,24 +603,7 @@ func TestDownsamplingBackfillEqualsDirect(t *testing.T) {
 			"ds_ref_gauge":   genTestSeries(rng, base, 3000, false),
 			"ds_ref_counter": genTestSeries(rng, base, 3000, true),
 		}
-		// The backfill overlaps the input: new timestamps, and equal timestamps with other values.
-		backfill := make(map[string][]testSample)
-		for name, samples := range input {
-			for i, sm := range samples {
-				switch {
-				case i%3 == 0:
-					backfill[name] = append(backfill[name], testSample{sm.ts + 1 + rng.Int63n(14000), sm.v + 1000})
-				case i%7 == 0:
-					backfill[name] = append(backfill[name], testSample{sm.ts, sm.v + 500})
-				case i%11 == 0:
-					backfill[name] = append(backfill[name], testSample{sm.ts, decimal.StaleNaN})
-				}
-			}
-		}
-		union := make(map[string][]testSample)
-		for name := range input {
-			union[name] = append(slices.Clone(input[name]), backfill[name]...)
-		}
+		backfill, union := genTestBackfill(rng, input)
 
 		late := MustOpenStorage(t.Name()+"/late", opts)
 		defer late.MustClose()
@@ -649,4 +632,155 @@ func TestDownsamplingBackfillEqualsDirect(t *testing.T) {
 			t.Fatalf("thinning with a late backfill differs from thinning everything at once")
 		}
 	})
+}
+
+// genTestBackfill returns a backfill which overlaps input: new timestamps, and equal timestamps with other values.
+// It also returns the union of input and the backfill.
+func genTestBackfill(rng *rand.Rand, input map[string][]testSample) (map[string][]testSample, map[string][]testSample) {
+	backfill := make(map[string][]testSample)
+	union := make(map[string][]testSample)
+	for name, samples := range input {
+		for i, sm := range samples {
+			// stale markers stay stale markers: any other NaN is dropped on ingestion
+			shift := func(d float64) float64 {
+				if decimal.IsStaleNaN(sm.v) {
+					return sm.v
+				}
+				return sm.v + d
+			}
+			switch {
+			case i%3 == 0:
+				backfill[name] = append(backfill[name], testSample{sm.ts + 1 + rng.Int63n(14000), shift(1000)})
+			case i%7 == 0:
+				backfill[name] = append(backfill[name], testSample{sm.ts, shift(500)})
+			case i%11 == 0:
+				backfill[name] = append(backfill[name], testSample{sm.ts, decimal.StaleNaN})
+			}
+		}
+		union[name] = append(slices.Clone(samples), backfill[name]...)
+	}
+	return backfill, union
+}
+
+// A stock backfill into a thinned month is thinned without rewriting the parts which already claim the interval.
+func TestDownsamplingMergesOnlyUnderStampedParts(t *testing.T) {
+	defer testRemoveAll(t)
+
+	const interval = int64(60000)
+	opts := OpenOptions{Retention: 5 * 365 * 24 * time.Hour}
+
+	synctest.Test(t, func(t *testing.T) {
+		rng := rand.New(rand.NewSource(4))
+		base := time.Date(1999, 10, 10, 0, 0, 0, 0, time.UTC).UnixMilli()
+		input := map[string][]testSample{
+			"ds_ref_gauge":   genTestSeries(rng, base, 3000, false),
+			"ds_ref_counter": genTestSeries(rng, base, 3000, true),
+		}
+		backfill, union := genTestBackfill(rng, input)
+
+		withDownsamplingRules(t, 15000, "30d:1m", false)
+		s := MustOpenStorage(t.Name()+"/s", opts)
+		defer func() { s.MustClose() }()
+		addTestSeries(s, input)
+		if err := s.ForceMergePartitions(""); err != nil {
+			t.Fatalf("cannot force merge: %s", err)
+		}
+		thinnedPaths := getTestPartitionStats(s)["1999_10"].partPaths
+		s.MustClose()
+
+		// stock writes the backfill as new parts which claim only the global interval
+		withDownsamplingRules(t, 15000, "", false)
+		// merge indexes derive from the clock, which is frozen in the bubble
+		time.Sleep(time.Second)
+		s = MustOpenStorage(t.Name()+"/s", opts)
+		addTestSeries(s, backfill)
+		s.MustClose()
+
+		withDownsamplingRules(t, 15000, "30d:1m", false)
+		time.Sleep(time.Second)
+		s = MustOpenStorage(t.Name()+"/s", opts)
+		mergeOld := func() {
+			ptws := s.tb.GetAllPartitions(nil)
+			defer s.tb.PutPartitions(ptws)
+			for _, ptw := range ptws {
+				if ptw.pt.name == "1999_10" {
+					if err := ptw.pt.mergeUnderStampedParts(nil); err != nil {
+						t.Fatalf("cannot merge: %s", err)
+					}
+				}
+			}
+		}
+		if !getTestPartitionStats(s)["1999_10"].finalNeeded {
+			t.Fatalf("the backfilled month must need thinning")
+		}
+		mergeOld()
+		st := getTestPartitionStats(s)["1999_10"]
+		if st.finalNeeded || st.minDedup != interval {
+			t.Fatalf("the backfilled month must be thinned; got %+v", st)
+		}
+		for _, p := range thinnedPaths {
+			if !slices.Contains(st.partPaths, p) {
+				t.Fatalf("thinned part %s must not be rewritten; parts now: %v", p, st.partPaths)
+			}
+		}
+		if len(st.partPaths) <= len(thinnedPaths) {
+			t.Fatalf("expecting the backfill in a separate part; got %v", st.partPaths)
+		}
+		mergeOld()
+		if again := getTestPartitionStats(s)["1999_10"]; !slices.Equal(again.partPaths, st.partPaths) {
+			t.Fatalf("a second merge must be a no-op; got %v; want %v", again.partPaths, st.partPaths)
+		}
+
+		// The parts are thinned separately, so a bucket keeps at most one sample from each of them.
+		got := flattenTestBlocks(readTestBlocks(t, s, testRange(1999, 10)))
+		for name, samples := range union {
+			checkThinnedParts(t, name, samples, got[name], interval)
+		}
+
+		// The next merge which joins the parts gives the same samples as thinning everything at once.
+		if err := s.ForceMergePartitions(""); err != nil {
+			t.Fatalf("cannot force merge: %s", err)
+		}
+		direct := MustOpenStorage(t.Name()+"/direct", opts)
+		defer direct.MustClose()
+		addTestSeries(direct, union)
+		if err := direct.ForceMergePartitions(""); err != nil {
+			t.Fatalf("cannot force merge: %s", err)
+		}
+		gotSig := testSamplesSig(flattenTestBlocks(readTestBlocks(t, s, testRange(1999, 10))))
+		wantSig := testSamplesSig(flattenTestBlocks(readTestBlocks(t, direct, testRange(1999, 10))))
+		if gotSig != wantSig {
+			t.Fatalf("thinning the joined parts differs from thinning everything at once")
+		}
+	})
+}
+
+// checkThinnedParts checks kept samples from two parts thinned separately: every kept sample is an input sample,
+// no bucket is lost, a bucket keeps at most 2 samples, and the last input sample of every bucket is kept.
+func checkThinnedParts(t *testing.T, name string, input, kept []testSample, interval int64) {
+	t.Helper()
+	values := make(map[int64][]float64)
+	lastTs := make(map[int64]int64)
+	for _, sm := range input {
+		values[sm.ts] = append(values[sm.ts], sm.v)
+		b := bucketOf(sm.ts, interval)
+		lastTs[b] = max(lastTs[b], sm.ts)
+	}
+	byBucket := make(map[int64][]testSample)
+	for _, sm := range kept {
+		if !slices.ContainsFunc(values[sm.ts], func(v float64) bool { return sameTestValue(v, sm.v) }) {
+			t.Fatalf("%s: kept sample %+v is not in the input", name, sm)
+		}
+		b := bucketOf(sm.ts, interval)
+		byBucket[b] = append(byBucket[b], sm)
+	}
+	if len(byBucket) != len(lastTs) {
+		t.Fatalf("%s: kept %d buckets; input has %d", name, len(byBucket), len(lastTs))
+	}
+	for b, ts := range lastTs {
+		k := byBucket[b]
+		if len(k) > 2 || !slices.ContainsFunc(k, func(sm testSample) bool { return sm.ts == ts }) {
+			t.Fatalf("%s: bucket %d keeps %+v; want at most 2 samples including ts=%d", name, b, k, ts)
+		}
+	}
 }
